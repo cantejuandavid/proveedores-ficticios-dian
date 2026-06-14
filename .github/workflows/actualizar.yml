@@ -2,8 +2,8 @@ name: Actualizar proveedores ficticios DIAN
 
 on:
   schedule:
-    # Lunes 6:00 a.m. hora Colombia (UTC-5) => 11:00 UTC
-    - cron: "0 11 * * 1"
+    # Lunes y jueves 6:00 a.m. hora Colombia (UTC-5) => 11:00 UTC
+    - cron: "0 11 * * 1,4"
   workflow_dispatch: {}
 
 # Permite al GITHUB_TOKEN hacer commit/push de los archivos generados.

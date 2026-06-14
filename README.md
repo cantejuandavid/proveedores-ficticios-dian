@@ -8,7 +8,8 @@ de la DIAN y la publica como un CSV estable que puede leerse desde Excel/VBA por
   `<li data-content="Proveedores ficticios">`, resuelve el enlace **actual** del PDF
   (cambia cada vez que la DIAN actualiza), descarga el PDF y extrae la tabla con `pdfplumber`.
 - Un GitHub Action programado ([`.github/workflows/actualizar.yml`](.github/workflows/actualizar.yml))
-  lo ejecuta cada semana (y manualmente cuando quieras) y commitea los archivos solo si cambian.
+  lo ejecuta dos veces por semana (lunes y jueves) y manualmente cuando quieras, y commitea
+  los archivos solo si cambian.
 
 ## URL raw del CSV (la que consume Excel/VBA)
 
