@@ -1,0 +1,51 @@
+name: Actualizar proveedores ficticios DIAN
+
+on:
+  schedule:
+    # Lunes 6:00 a.m. hora Colombia (UTC-5) => 11:00 UTC
+    - cron: "0 11 * * 1"
+  workflow_dispatch: {}
+
+# Permite al GITHUB_TOKEN hacer commit/push de los archivos generados.
+permissions:
+  contents: write
+
+concurrency:
+  group: actualizar-dian
+  cancel-in-progress: false
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Instalar Chromium para Playwright
+        run: python -m playwright install --with-deps chromium
+
+      - name: Ejecutar scraper
+        run: python scraper.py
+
+      - name: Commit y push si hubo cambios
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add proveedores_ficticios.csv proveedores_ficticios.json meta.json
+          if git diff --staged --quiet; then
+            echo "Sin cambios: nada que commitear."
+          else
+            git commit -m "Actualizar proveedores ficticios DIAN ($(date -u +'%Y-%m-%d %H:%M UTC'))"
+            git push
+          fi
