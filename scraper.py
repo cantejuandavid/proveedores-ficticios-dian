@@ -8,17 +8,21 @@ Mantiene actualizada la lista oficial de "Proveedores ficticios" de la DIAN.
 Flujo:
   1. Abre https://www.dian.gov.co/Paginas/Inicio.aspx con Playwright (Chromium headless),
      porque la página es dinámica (JavaScript) y `requests` no ve el <li>.
+     (Se bloquean imágenes/fuentes/CSS/medios para cargar solo el DOM: más rápido.)
   2. Localiza el elemento <li data-content="Proveedores ficticios"> y obtiene el href
      actual del enlace que contiene (la DIAN cambia este enlace en cada actualización).
   3. Descarga el PDF apuntado por ese enlace.
   4. Extrae la(s) tabla(s) del PDF con pdfplumber y normaliza las columnas a:
         NIT ; Razon_Social ; Resolucion ; Fecha ; Estado
-  5. Escribe en la raíz del repo:
+  5. Si los datos cambiaron respecto al CSV actual, escribe en la raíz del repo:
         - proveedores_ficticios.csv   (UTF-8 con BOM, separador ';', con encabezados)
         - proveedores_ficticios.json  (UTF-8)
         - meta.json                   (fecha de actualización, URL del PDF, # de registros)
+     Si NO cambiaron, no reescribe nada (así el commit del workflow es realmente condicional
+     y `meta.json` refleja la última vez que los datos cambiaron de verdad).
 
 Robustez:
+  - La carga de la página y la descarga del PDF se reintentan ante fallos transitorios.
   - Si NO encuentra el enlace, no puede descargar, o la extracción no supera las
     validaciones mínimas, el script NO sobrescribe el CSV bueno anterior, registra el
     error y sale con código != 0.
@@ -34,11 +38,13 @@ Mapeo de columnas (documentado):
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import logging
 import re
 import sys
+import time
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,9 +71,16 @@ COLUMN_KEYWORDS = {
     "Estado": ["estado", "observacion", "observación", "situacion", "situación"],
 }
 
+# Recursos que NO necesitamos para hallar el <li> (acelera la carga de la página).
+RECURSOS_BLOQUEADOS = {"image", "font", "stylesheet", "media"}
+
 # Validaciones mínimas para considerar la extracción exitosa.
 MIN_ROWS = 5            # al menos esta cantidad de filas de datos
 MIN_NIT_LIKE_RATIO = 0.5  # al menos este % de filas con un NIT plausible (dígitos)
+
+# Reintentos ante fallos transitorios (red / render).
+REINTENTOS = 3
+ESPERA_REINTENTO = 4  # segundos entre intentos
 
 # Salidas (en la raíz del repo, junto a este script).
 ROOT = Path(__file__).resolve().parent
@@ -92,62 +105,89 @@ class ScraperError(Exception):
     """Error controlado: aborta sin sobrescribir los datos buenos."""
 
 
+def _reintentar(fn, *, descripcion: str, intentos: int = REINTENTOS, espera: int = ESPERA_REINTENTO):
+    """Ejecuta `fn` reintentando ante cualquier excepción transitoria."""
+    ultimo_error: Exception | None = None
+    for n in range(1, intentos + 1):
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001
+            ultimo_error = e
+            if n < intentos:
+                log.warning("Intento %d/%d de %s falló: %s. Reintentando en %ds...",
+                            n, intentos, descripcion, e, espera)
+                time.sleep(espera)
+            else:
+                log.error("Agotados los %d intentos de %s.", intentos, descripcion)
+    raise ultimo_error  # type: ignore[misc]
+
+
 # ----------------------------------------------------------------------------
 # Paso 1-2: obtener el enlace actual del PDF con Playwright
 # ----------------------------------------------------------------------------
 
+def _extraer_href(page) -> str:
+    """Navega a la página de la DIAN y devuelve la URL absoluta del PDF."""
+    page.goto(DIAN_URL, wait_until="domcontentloaded", timeout=60_000)
+
+    # El <li> lo inyecta JS; esperamos a que aparezca (no a 'networkidle').
+    page.wait_for_selector(LI_SELECTOR, timeout=30_000)
+
+    li = page.locator(LI_SELECTOR).first
+    if li.count() == 0:
+        raise ScraperError(f"No se encontró el elemento {LI_SELECTOR} en la página.")
+
+    # El enlace puede estar en un <a> hijo, en atributos data-* o embebido en el HTML.
+    href = None
+    anchor = li.locator("a[href]").first
+    if anchor.count() > 0:
+        href = anchor.get_attribute("href")
+
+    if not href:
+        for attr in ("data-href", "data-url", "data-link"):
+            val = li.get_attribute(attr)
+            if val:
+                href = val
+                break
+
+    if not href:
+        inner = li.inner_html() or ""
+        m = re.search(r'href=["\']([^"\']+)["\']', inner)
+        if m:
+            href = m.group(1)
+
+    if not href:
+        raise ScraperError("Se encontró el <li> pero no se pudo extraer ningún enlace (href).")
+
+    return urljoin(page.url, href.strip())
+
+
 def obtener_url_pdf() -> str:
-    """Renderiza la página de la DIAN y devuelve la URL absoluta del PDF de
-    proveedores ficticios."""
+    """Renderiza la página de la DIAN (con reintentos) y devuelve la URL del PDF."""
     from playwright.sync_api import sync_playwright
 
     log.info("Abriendo %s con Playwright...", DIAN_URL)
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            context = browser.new_context(user_agent=USER_AGENT, locale="es-CO")
-            page = context.new_page()
-            page.goto(DIAN_URL, wait_until="networkidle", timeout=60_000)
-
-            # El <li> puede tardar en aparecer porque lo inyecta JS.
-            try:
-                page.wait_for_selector(LI_SELECTOR, timeout=30_000)
-            except Exception:
-                log.warning("Timeout esperando %s; intento buscar de todos modos.", LI_SELECTOR)
-
-            li = page.query_selector(LI_SELECTOR)
-            if li is None:
-                raise ScraperError(
-                    f"No se encontró el elemento {LI_SELECTOR} en la página."
+            def intento() -> str:
+                context = browser.new_context(user_agent=USER_AGENT, locale="es-CO")
+                # Bloquear recursos pesados e innecesarios para acelerar la carga.
+                context.route(
+                    "**/*",
+                    lambda route: (
+                        route.abort()
+                        if route.request.resource_type in RECURSOS_BLOQUEADOS
+                        else route.continue_()
+                    ),
                 )
+                page = context.new_page()
+                try:
+                    return _extraer_href(page)
+                finally:
+                    context.close()
 
-            # El enlace puede estar en el propio <li>, en un <a> hijo, o en data-* attrs.
-            href = None
-            anchor = li.query_selector("a[href]")
-            if anchor is not None:
-                href = anchor.get_attribute("href")
-
-            if not href:
-                # fallback: algún atributo data-* del <li> que parezca una URL/pdf
-                for attr in ("data-href", "data-url", "data-link"):
-                    val = li.get_attribute(attr)
-                    if val:
-                        href = val
-                        break
-
-            if not href:
-                # fallback: cualquier href dentro del HTML del <li>
-                inner = li.inner_html() or ""
-                m = re.search(r'href=["\']([^"\']+)["\']', inner)
-                if m:
-                    href = m.group(1)
-
-            if not href:
-                raise ScraperError(
-                    "Se encontró el <li> pero no se pudo extraer ningún enlace (href)."
-                )
-
-            url_abs = urljoin(page.url, href.strip())
+            url_abs = _reintentar(intento, descripcion="cargar la página de la DIAN")
             log.info("Enlace de proveedores ficticios: %s", url_abs)
             return url_abs
         finally:
@@ -161,16 +201,21 @@ def obtener_url_pdf() -> str:
 def descargar_pdf(url: str) -> bytes:
     log.info("Descargando PDF...")
     headers = {"User-Agent": USER_AGENT, "Accept": "application/pdf,*/*"}
-    resp = requests.get(url, headers=headers, timeout=120, allow_redirects=True)
-    resp.raise_for_status()
 
-    content = resp.content
-    ctype = resp.headers.get("Content-Type", "")
-    if not (content[:5] == b"%PDF-" or "pdf" in ctype.lower()):
-        raise ScraperError(
-            f"El contenido descargado no parece un PDF (Content-Type={ctype!r}, "
-            f"primeros bytes={content[:8]!r})."
-        )
+    def intento() -> bytes:
+        with requests.Session() as s:
+            resp = s.get(url, headers=headers, timeout=120, allow_redirects=True)
+        resp.raise_for_status()
+        content = resp.content
+        ctype = resp.headers.get("Content-Type", "")
+        if not (content[:5] == b"%PDF-" or "pdf" in ctype.lower()):
+            raise ScraperError(
+                f"El contenido descargado no parece un PDF (Content-Type={ctype!r}, "
+                f"primeros bytes={content[:8]!r})."
+            )
+        return content
+
+    content = _reintentar(intento, descripcion="descargar el PDF")
     log.info("PDF descargado: %d bytes", len(content))
     return content
 
@@ -285,24 +330,44 @@ def validar(registros: list[dict]) -> None:
 
 
 # ----------------------------------------------------------------------------
-# Paso 5: escribir salidas (atómico)
+# Paso 5: escribir salidas (atómico y solo si cambiaron los datos)
 # ----------------------------------------------------------------------------
 
-def escribir_salidas(registros: list[dict], url_pdf: str) -> None:
-    import csv
+def _csv_str(registros: list[dict]) -> str:
+    """Serializa los registros a CSV (separador ';', salto '\\n' determinista)."""
+    buf = io.StringIO()
+    writer = csv.DictWriter(
+        buf, fieldnames=CANONICAL_COLUMNS, delimiter=";",
+        extrasaction="ignore", lineterminator="\n",
+    )
+    writer.writeheader()
+    writer.writerows(registros)
+    return buf.getvalue()
 
-    # CSV temporal -> reemplazo atómico. UTF-8 con BOM para que Excel reconozca acentos.
+
+def escribir_salidas(registros: list[dict], url_pdf: str) -> bool:
+    """Escribe CSV/JSON/meta solo si el CSV cambió. Devuelve True si hubo cambios."""
+    nuevo_csv = _csv_str(registros)
+
+    # Comparar con el CSV actual (utf-8-sig descarta el BOM al leer).
+    if CSV_PATH.exists():
+        try:
+            actual = CSV_PATH.read_text(encoding="utf-8-sig")
+        except OSError:
+            actual = None
+        if actual == nuevo_csv:
+            log.info("Datos idénticos al CSV actual (%d filas): no se reescribe nada.",
+                     len(registros))
+            return False
+
+    # CSV con BOM (UTF-8) para que Excel reconozca acentos; salto '\n' (ver .gitattributes).
     tmp_csv = CSV_PATH.with_suffix(".csv.tmp")
-    with open(tmp_csv, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=CANONICAL_COLUMNS, delimiter=";", extrasaction="ignore"
-        )
-        writer.writeheader()
-        writer.writerows(registros)
+    tmp_csv.write_text(nuevo_csv, encoding="utf-8-sig", newline="")
 
     tmp_json = JSON_PATH.with_suffix(".json.tmp")
-    with open(tmp_json, "w", encoding="utf-8") as f:
-        json.dump(registros, f, ensure_ascii=False, indent=2)
+    tmp_json.write_text(
+        json.dumps(registros, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n"
+    )
 
     meta = {
         "fecha_actualizacion": datetime.now(timezone.utc).isoformat(),
@@ -312,14 +377,16 @@ def escribir_salidas(registros: list[dict], url_pdf: str) -> None:
         "fuente": DIAN_URL,
     }
     tmp_meta = META_PATH.with_suffix(".json.tmp")
-    with open(tmp_meta, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    tmp_meta.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8", newline="\n"
+    )
 
     # Reemplazo atómico solo cuando todo se generó bien.
     tmp_csv.replace(CSV_PATH)
     tmp_json.replace(JSON_PATH)
     tmp_meta.replace(META_PATH)
-    log.info("Archivos escritos: %s, %s, %s", CSV_PATH.name, JSON_PATH.name, META_PATH.name)
+    log.info("Archivos actualizados: %s, %s, %s", CSV_PATH.name, JSON_PATH.name, META_PATH.name)
+    return True
 
 
 # ----------------------------------------------------------------------------
@@ -332,8 +399,11 @@ def main() -> int:
         pdf_bytes = descargar_pdf(url_pdf)
         registros = extraer_tabla(pdf_bytes)
         validar(registros)
-        escribir_salidas(registros, url_pdf)
-        log.info("Proceso completado con éxito (%d registros).", len(registros))
+        cambiaron = escribir_salidas(registros, url_pdf)
+        if cambiaron:
+            log.info("Proceso completado: datos actualizados (%d registros).", len(registros))
+        else:
+            log.info("Proceso completado: sin cambios (%d registros).", len(registros))
         return 0
     except ScraperError as e:
         log.error("Fallo controlado: %s", e)

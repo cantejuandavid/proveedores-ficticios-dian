@@ -32,8 +32,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Instalar Chromium para Playwright
-        run: python -m playwright install --with-deps chromium
+      - name: Cachear navegador de Playwright (Chromium)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Instalar dependencias del sistema para Chromium
+        run: python -m playwright install-deps chromium
+
+      - name: Instalar Chromium (omite la descarga si está en caché)
+        run: python -m playwright install chromium
 
       - name: Ejecutar scraper
         run: python scraper.py
