@@ -126,6 +126,28 @@ FUENTES = [
         "min_filas": 3,
         "min_id_ratio": 0.5,
     },
+    {
+        "nombre": "Autorretenedores de renta",
+        "pagina": "https://www.dian.gov.co/impuestos/Autorretenedores/Paginas/Autorretenedor-del-Impuesto-sobre-la-Renta.aspx",
+        "li_selector": 'a[href*="/impuestos/Autorretenedores/Documents/"]',
+        "csv": "autorretenedores_renta.csv",
+        "json": "autorretenedores_renta.json",
+        "meta": "autorretenedores_renta.meta.json",
+        "columnas": ["NIT", "Razon_Social", "Resolucion", "Fecha"],
+        "keywords": {
+            "NIT": ["nit", "identificacion", "documento"],
+            "Razon_Social": ["razon", "nombre", "social"],
+            "Resolucion": ["resolucion", "numero", "acto"],
+            "Fecha": ["fecha"],
+        },
+        "requeridas": ["NIT", "Razon_Social"],
+        "col_id": "NIT",
+        "min_filas": 100,       # son miles de autorretenedores
+        "min_id_ratio": 0.9,
+        # El PDF repite una fila de título y otra de encabezado en cada página:
+        # quedarse solo con filas cuyo NIT sea numérico las descarta automáticamente.
+        "solo_filas_con_id": True,
+    },
 ]
 
 logging.basicConfig(
@@ -162,25 +184,32 @@ def _reintentar(fn, *, descripcion: str, intentos: int = REINTENTOS, espera: int
 # ----------------------------------------------------------------------------
 
 def _href_de(page, selector: str) -> str | None:
-    """Devuelve la URL absoluta del enlace dentro del <li> indicado, o None."""
-    li = page.locator(selector).first
-    if li.count() == 0:
+    """Devuelve la URL absoluta del enlace ubicado por `selector`, o None.
+    Funciona tanto si el selector apunta al propio <a> como a un contenedor (p.ej. un <li>)."""
+    el = page.locator(selector).first
+    if el.count() == 0:
         return None
 
-    href = None
-    anchor = li.locator("a[href]").first
-    if anchor.count() > 0:
-        href = anchor.get_attribute("href")
+    # 1) el propio elemento es un <a> con href
+    href = el.get_attribute("href")
 
+    # 2) o contiene un <a href> (caso <li ...><a>...</a></li>)
+    if not href:
+        anchor = el.locator("a[href]").first
+        if anchor.count() > 0:
+            href = anchor.get_attribute("href")
+
+    # 3) o trae el enlace en un atributo data-*
     if not href:
         for attr in ("data-href", "data-url", "data-link"):
-            val = li.get_attribute(attr)
+            val = el.get_attribute(attr)
             if val:
                 href = val
                 break
 
+    # 4) último recurso: buscar un href embebido en el HTML interno
     if not href:
-        inner = li.inner_html() or ""
+        inner = el.inner_html() or ""
         m = re.search(r'href=["\']([^"\']+)["\']', inner)
         if m:
             href = m.group(1)
@@ -191,42 +220,59 @@ def _href_de(page, selector: str) -> str | None:
 
 
 def obtener_urls(fuentes: list[dict]) -> dict[str, str | None]:
-    """Carga la página de la DIAN una sola vez y devuelve {nombre_fuente: url_pdf|None}."""
+    """Carga cada página necesaria (una sola vez por URL) y devuelve {nombre_fuente: url_pdf|None}.
+
+    Las fuentes se agrupan por su página de origen: si una página falla, las fuentes de las
+    otras páginas igual se resuelven."""
     from playwright.sync_api import sync_playwright
 
-    log.info("Abriendo %s con Playwright...", DIAN_URL)
+    # Agrupar fuentes por su página de origen (por defecto, la home de la DIAN).
+    paginas: dict[str, list[dict]] = {}
+    for f in fuentes:
+        paginas.setdefault(f.get("pagina", DIAN_URL), []).append(f)
+
+    resultado: dict[str, str | None] = {}
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         try:
-            def intento() -> dict[str, str | None]:
-                context = browser.new_context(user_agent=USER_AGENT, locale="es-CO")
-                context.route(
-                    "**/*",
-                    lambda route: (
-                        route.abort()
-                        if route.request.resource_type in RECURSOS_BLOQUEADOS
-                        else route.continue_()
-                    ),
-                )
-                page = context.new_page()
-                try:
-                    page.goto(DIAN_URL, wait_until="domcontentloaded", timeout=60_000)
-                    urls: dict[str, str | None] = {}
-                    for f in fuentes:
-                        sel = f["li_selector"]
-                        try:
-                            page.wait_for_selector(sel, timeout=30_000)
-                        except Exception:
-                            log.warning("No apareció el selector de '%s' (%s).", f["nombre"], sel)
-                        urls[f["nombre"]] = _href_de(page, sel)
-                    return urls
-                finally:
-                    context.close()
+            for pagina, fs in paginas.items():
+                log.info("Abriendo %s con Playwright...", pagina)
 
-            urls = _reintentar(intento, descripcion="cargar la página de la DIAN")
-            for nombre, url in urls.items():
+                def intento(pagina=pagina, fs=fs) -> dict[str, str | None]:
+                    context = browser.new_context(user_agent=USER_AGENT, locale="es-CO")
+                    context.route(
+                        "**/*",
+                        lambda route: (
+                            route.abort()
+                            if route.request.resource_type in RECURSOS_BLOQUEADOS
+                            else route.continue_()
+                        ),
+                    )
+                    page = context.new_page()
+                    try:
+                        page.goto(pagina, wait_until="domcontentloaded", timeout=60_000)
+                        urls: dict[str, str | None] = {}
+                        for f in fs:
+                            sel = f["li_selector"]
+                            try:
+                                page.wait_for_selector(sel, timeout=30_000)
+                            except Exception:
+                                log.warning("No apareció el selector de '%s' (%s).", f["nombre"], sel)
+                            urls[f["nombre"]] = _href_de(page, sel)
+                        return urls
+                    finally:
+                        context.close()
+
+                try:
+                    urls = _reintentar(intento, descripcion=f"cargar {pagina}")
+                except Exception as e:  # noqa: BLE001
+                    log.error("No se pudo cargar %s: %s", pagina, e)
+                    urls = {f["nombre"]: None for f in fs}
+                resultado.update(urls)
+
+            for nombre, url in resultado.items():
                 log.info("Enlace [%s]: %s", nombre, url or "NO ENCONTRADO")
-            return urls
+            return resultado
         finally:
             browser.close()
 
@@ -313,6 +359,8 @@ def extraer_tabla(pdf_bytes: bytes, fuente: dict) -> list[dict]:
     columnas = fuente["columnas"]
     keywords = fuente["keywords"]
     requeridas = fuente["requeridas"]
+    col_id = fuente["col_id"]
+    solo_con_id = fuente.get("solo_filas_con_id", False)
 
     registros: list[dict] = []
     mapeo_global: dict[int, str] | None = None
@@ -324,13 +372,17 @@ def extraer_tabla(pdf_bytes: bytes, fuente: dict) -> list[dict]:
             for tabla in tablas:
                 if not tabla:
                     continue
+                # Buscar la fila de encabezado en las primeras filas (hay PDF con una fila
+                # de título antes del encabezado, y el encabezado se repite por página).
                 inicio = 0
-                posible = _mapear_encabezado(
-                    [_limpiar(c) for c in tabla[0]], keywords, requeridas
-                )
-                if posible:
-                    mapeo_global = posible
-                    inicio = 1
+                for hi in range(min(5, len(tabla))):
+                    posible = _mapear_encabezado(
+                        [_limpiar(c) for c in tabla[hi]], keywords, requeridas
+                    )
+                    if posible:
+                        mapeo_global = posible
+                        inicio = hi + 1
+                        break
 
                 mapeo = mapeo_global
                 for fila in tabla[inicio:]:
@@ -349,9 +401,15 @@ def extraer_tabla(pdf_bytes: bytes, fuente: dict) -> list[dict]:
                             if i < len(celdas):
                                 reg[canon] = celdas[i]
 
-                    # Descartar filas no-datos: todas las columnas requeridas vacías.
-                    if all(not reg.get(c) for c in requeridas):
-                        continue
+                    if solo_con_id:
+                        # Mantener solo filas cuyo identificador parezca un número
+                        # (descarta filas de título/encabezado repetidas por página).
+                        if not _parece_id(reg.get(col_id, "")):
+                            continue
+                    else:
+                        # Descartar filas no-datos: todas las columnas requeridas vacías.
+                        if all(not reg.get(c) for c in requeridas):
+                            continue
                     registros.append(reg)
 
             log.info("[%s] Página %d procesada (%d registros).",

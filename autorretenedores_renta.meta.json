@@ -1,0 +1,13 @@
+{
+  "fuente": "Autorretenedores de renta",
+  "fecha_actualizacion": "2026-06-20T19:11:58.883663+00:00",
+  "url_pdf": "https://www.dian.gov.co/impuestos/Autorretenedores/Documents/Listado-actualizado-Renta-04062026.pdf",
+  "num_registros": 3315,
+  "columnas": [
+    "NIT",
+    "Razon_Social",
+    "Resolucion",
+    "Fecha"
+  ],
+  "pagina": "https://www.dian.gov.co/Paginas/Inicio.aspx"
+}

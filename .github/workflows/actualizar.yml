@@ -52,7 +52,8 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add proveedores_ficticios.csv proveedores_ficticios.json meta.json \
-                  contadores_sancionados.csv contadores_sancionados.json contadores_sancionados.meta.json
+                  contadores_sancionados.csv contadores_sancionados.json contadores_sancionados.meta.json \
+                  autorretenedores_renta.csv autorretenedores_renta.json autorretenedores_renta.meta.json
           if git diff --staged --quiet; then
             echo "Sin cambios: nada que commitear."
           else

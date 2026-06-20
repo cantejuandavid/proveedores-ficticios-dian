@@ -1,16 +1,17 @@
 # Listas DIAN — actualización automática
 
-Mantiene actualizadas, de forma automática, dos listas oficiales de la DIAN y las publica
+Mantiene actualizadas, de forma automática, tres listas oficiales de la DIAN y las publica
 como CSV estables que pueden leerse desde Excel/VBA por una URL fija:
 
 1. **Proveedores ficticios**
 2. **Contadores sancionados por la DIAN**
+3. **Autorretenedores del impuesto sobre la renta**
 
 - Fuente oficial: https://www.dian.gov.co/Paginas/Inicio.aspx
-- El script ([`scraper.py`](scraper.py)) renderiza la página con Playwright **una sola vez**,
-  localiza el `<li data-content="...">` de cada lista, resuelve el enlace **actual** de su PDF
-  (cambia cada vez que la DIAN actualiza), descarga el PDF y extrae la tabla con `pdfplumber`.
-- Cada lista se procesa de forma **independiente**: si una falla, la otra se actualiza igual.
+- El script ([`scraper.py`](scraper.py)) renderiza con Playwright la página de cada lista,
+  localiza su enlace (un `<li data-content="...">` o un `<a href>`), resuelve la URL **actual**
+  de su PDF (cambia cada vez que la DIAN actualiza), lo descarga y extrae la tabla con `pdfplumber`.
+- Cada lista se procesa de forma **independiente**: si una falla, las demás se actualizan igual.
 - Un GitHub Action programado ([`.github/workflows/actualizar.yml`](.github/workflows/actualizar.yml))
   lo ejecuta dos veces por semana (lunes y jueves) y manualmente cuando quieras, y commitea
   los archivos solo si cambian.
@@ -19,8 +20,9 @@ como CSV estables que pueden leerse desde Excel/VBA por una URL fija:
 
 Este proyecto tiene **fines exclusivamente académicos y de apoyo a la comunidad contable y
 tributaria**. Su único objetivo es facilitar el acceso a información **pública** que la DIAN ya
-publica en su página oficial —las listas de **Proveedores ficticios** y de **Contadores
-sancionados por la DIAN**—, de modo que sirva como **ayuda para la toma de decisiones**.
+publica en su página oficial —las listas de **Proveedores ficticios**, **Contadores
+sancionados por la DIAN** y **Autorretenedores del impuesto sobre la renta**—, de modo que
+sirva como **ayuda para la toma de decisiones**.
 
 - No persigue ningún fin comercial, ni distinto al de consultar y consolidar esa información pública.
 - No modifica, interpreta ni certifica los datos: solo reproduce lo que la DIAN publica en sus PDF.
@@ -35,6 +37,7 @@ sancionados por la DIAN**—, de modo que sirva como **ayuda para la toma de dec
 ```
 https://raw.githubusercontent.com/cantejuandavid/proveedores-ficticios-dian/main/proveedores_ficticios.csv
 https://raw.githubusercontent.com/cantejuandavid/proveedores-ficticios-dian/main/contadores_sancionados.csv
+https://raw.githubusercontent.com/cantejuandavid/proveedores-ficticios-dian/main/autorretenedores_renta.csv
 ```
 
 > Son las URLs fijas que consumen las macros de Excel/VBA.
@@ -49,6 +52,9 @@ https://raw.githubusercontent.com/cantejuandavid/proveedores-ficticios-dian/main
 | `contadores_sancionados.csv` | UTF-8 (con BOM), separador `;`, con encabezados. **Estructura estable.** |
 | `contadores_sancionados.json` | Mismos datos en JSON. |
 | `contadores_sancionados.meta.json` | Meta de contadores: fecha de actualización, URL del PDF y número de registros. |
+| `autorretenedores_renta.csv` | UTF-8 (con BOM), separador `;`, con encabezados. **Estructura estable.** |
+| `autorretenedores_renta.json` | Mismos datos en JSON. |
+| `autorretenedores_renta.meta.json` | Meta de autorretenedores: fecha de actualización, URL del PDF y número de registros. |
 
 ### Estructura fija de los CSV
 
@@ -58,6 +64,9 @@ NIT;Razon_Social;Resolucion;Fecha;Estado
 
 # contadores_sancionados.csv
 No;Nombre;Cedula;Inscripcion_Profesional;Resolucion;Sancion;Fecha_Ejecutoria;Vencimiento;Autoridad
+
+# autorretenedores_renta.csv
+NIT;Razon_Social;Resolucion;Fecha
 ```
 
 El mapeo de columnas del PDF a estos nombres canónicos está definido por fuente en la lista
