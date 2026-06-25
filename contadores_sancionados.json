@@ -463,17 +463,6 @@
   },
   {
     "No": "39",
-    "Nombre": "MANUEL JOAQUIN RODRIGUEZ AGUDELO",
-    "Cedula": "19.437.076",
-    "Inscripcion_Profesional": "207366-T",
-    "Resolucion": "T-000- 1719 del 24 de abril del 2025",
-    "Sancion": "SUSPENSIÓN (3) MESES",
-    "Fecha_Ejecutoria": "20/01/2026",
-    "Vencimiento": "20/04/2026",
-    "Autoridad": "JCC"
-  },
-  {
-    "No": "40",
     "Nombre": "CARLOS FERNANDO RODRÍGUEZ",
     "Cedula": "79.623.167",
     "Inscripcion_Profesional": "84409-T",
@@ -484,29 +473,7 @@
     "Autoridad": "JCC"
   },
   {
-    "No": "41",
-    "Nombre": "MARIO ALFONSO HOYOS MARTÍNEZ",
-    "Cedula": "72.258.125",
-    "Inscripcion_Profesional": "119950-T",
-    "Resolucion": "T-006-2026 del 26 de febrero de 2026.",
-    "Sancion": "SUSPENSIÓN (3) MESES",
-    "Fecha_Ejecutoria": "18/03/2026",
-    "Vencimiento": "18/06/2026",
-    "Autoridad": "JCC"
-  },
-  {
-    "No": "42",
-    "Nombre": "LUIS FRANCISCO BELTRÁN HERNÁNDEZ",
-    "Cedula": "3.195.231",
-    "Inscripcion_Profesional": "54824-T",
-    "Resolucion": "T-001-2026 30 de enero de 2026",
-    "Sancion": "SUSPENSIÓN (3) MESES",
-    "Fecha_Ejecutoria": "18/03/2026",
-    "Vencimiento": "18/06/2026",
-    "Autoridad": "JCC"
-  },
-  {
-    "No": "43",
+    "No": "40",
     "Nombre": "SANDRA MILENA TRUJILLO RÍOS",
     "Cedula": "35250450",
     "Inscripcion_Profesional": "169768-T",
@@ -517,7 +484,7 @@
     "Autoridad": "JCC"
   },
   {
-    "No": "44",
+    "No": "41",
     "Nombre": "CGC AUDITORES Y CONSULTORES S.A.S.",
     "Cedula": "900247872",
     "Inscripcion_Profesional": "2541 (SOCIEDAD)",
@@ -528,7 +495,7 @@
     "Autoridad": "JCC"
   },
   {
-    "No": "45",
+    "No": "42",
     "Nombre": "GLORIA ESPERANZA NIÑO SANCHEZ",
     "Cedula": "52503548",
     "Inscripcion_Profesional": "203419-T",
